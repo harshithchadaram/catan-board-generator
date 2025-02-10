@@ -1,16 +1,5 @@
 import React, { useState, useEffect, useCallback, memo } from 'react';
 
-// Responsive board setup
-const getHexSize = () => (window.innerWidth <= 768 ? 40 : 50);
-const getNumberSize = () => (window.innerWidth <= 768 ? 20 : 30);
-
-// Events
-const EVENTS = [
-  { name: "Storm", description: "Coastal hexes produce half resources!", bgColor: "#1e1e2f" },
-  { name: "Boom", description: "Forests produce double wood!", bgColor: "#1c3a4d" },
-  { name: "Famine", description: "Fields produce no hay!", bgColor: "#3d1f1f" }
-];
-
 // Resource image paths
 const resourceImages = {
   hills: '/images/Brick.png',
@@ -35,32 +24,47 @@ const numberImages = {
   12: '/images/coins/12.png',
 };
 
-// Preload images
-const preloadImages = () => {
-  return new Promise((resolve) => {
-    const images = [
-      ...Object.values(resourceImages),
-      ...Object.values(numberImages)
-    ];
-
-    let loadedCount = 0;
-    const totalImages = images.length;
-
-    const checkCompletion = () => {
-      loadedCount++;
-      if (loadedCount === totalImages) resolve();
-    };
-
-    images.forEach(src => {
-      const img = new Image();
-      img.src = src;
-      img.onload = checkCompletion;
-      img.onerror = checkCompletion;
-    });
-  });
+// Probability weights for each number
+const PROBABILITY_WEIGHTS = {
+  2: 1 / 36,
+  3: 2 / 36,
+  4: 3 / 36,
+  5: 4 / 36,
+  6: 5 / 36,
+  8: 5 / 36,
+  9: 4 / 36,
+  10: 3 / 36,
+  11: 2 / 36,
+  12: 1 / 36
 };
 
-// Memoized Tile component
+// Resource distributions for different board types
+const RESOURCE_DISTRIBUTIONS = {
+  normal: {
+    hills: 3,    // Brick
+    forest: 4,   // Wood
+    pasture: 4,  // Sheep
+    fields: 4,   // Grain
+    mountains: 3, // Ore
+    desert: 1
+  },
+  expansion: {
+    hills: 5,
+    forest: 6,
+    pasture: 6,
+    fields: 6,
+    mountains: 5,
+    desert: 2
+  }
+};
+
+// Number distributions for different board types
+const NUMBER_DISTRIBUTIONS = {
+  normal: [2, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8, 9, 9, 10, 10, 11, 11, 12],
+  expansion: [2, 3, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 6, 8, 8, 8, 8, 8, 9, 9, 9, 9, 10, 10, 10, 11, 12]
+};
+
+// Tile component
 const Tile = memo(({ tile, hexSize, numberSize }) => {
   const getHexPoints = (cx, cy) => {
     const points = [];
@@ -99,8 +103,6 @@ const Tile = memo(({ tile, hexSize, numberSize }) => {
         fill={`url(#pattern-${tile.id})`}
         stroke="#333"
         strokeWidth="2"
-        onClick={() => alert(`Tile: ${tile.resource.toUpperCase()}${tile.dice ? ' - ' + tile.dice : ''}`)}
-        style={{ cursor: 'pointer' }}
       />
       {tile.dice && (
         <image
@@ -120,198 +122,174 @@ const Tile = memo(({ tile, hexSize, numberSize }) => {
 function App() {
   const [boardType, setBoardType] = useState('normal');
   const [tiles, setTiles] = useState([]);
-  const [imagesLoaded, setImagesLoaded] = useState(false);
-  const [currentEvent] = useState(EVENTS[0]);
-  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
-  const [hexSize, setHexSize] = useState(getHexSize());
-  const [numberSize, setNumberSize] = useState(getNumberSize());
-  const [viewBox, setViewBox] = useState("0 0 100 100");
+  const [viewBox, setViewBox] = useState("0 0 800 600");
+  const [hexSize, setHexSize] = useState(50);
+  const [numberSize, setNumberSize] = useState(30);
+  const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
     const handleResize = () => {
-      setIsMobile(window.innerWidth <= 768);
-      setHexSize(getHexSize());
-      setNumberSize(getNumberSize());
+      const mobile = window.innerWidth <= 768;
+      setIsMobile(mobile);
+      setHexSize(mobile ? 40 : 50);
+      setNumberSize(mobile ? 20 : 30);
     };
+
     window.addEventListener('resize', handleResize);
+    handleResize();
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  useEffect(() => {
-    preloadImages().then(() => {
-      setImagesLoaded(true);
-    });
-  }, []);
-
-  const generateNormalPositions = useCallback((hexSize) => {
-    const N = 2;
-    const positions = [];
-    for (let q = -N; q <= N; q++) {
-      const r1 = Math.max(-N, -q - N);
-      const r2 = Math.min(N, -q + N);
-      for (let r = r1; r <= r2; r++) {
-        positions.push({
-          x: hexSize * Math.sqrt(3) * (q + r / 2),
-          y: hexSize * 1.5 * r
-        });
+  const generateHexPositions = useCallback(() => {
+    if (boardType === 'normal') {
+      const positions = [];
+      const N = 2;
+      for (let q = -N; q <= N; q++) {
+        const r1 = Math.max(-N, -q - N);
+        const r2 = Math.min(N, -q + N);
+        for (let r = r1; r <= r2; r++) {
+          positions.push({
+            x: hexSize * Math.sqrt(3) * (q + r / 2),
+            y: hexSize * 1.5 * r
+          });
+        }
       }
+      return positions;
+    } else {
+      const rows = [3, 4, 5, 6, 5, 4, 3];
+      const positions = [];
+      let y = 0;
+      rows.forEach((count, row) => {
+        const offset = (6 - count) / 2;
+        for (let i = 0; i < count; i++) {
+          positions.push({
+            x: (offset + i) * hexSize * Math.sqrt(3),
+            y: row * hexSize * 1.5
+          });
+        }
+      });
+      return positions;
     }
-    return positions;
-  }, []);
+  }, [boardType, hexSize]);
 
-  const generateExpansionPositions = useCallback((hexSize) => {
-    const rows = [
-      { count: 3, offset: (6 - 3) / 2 },
-      { count: 4, offset: (6 - 4) / 2 },
-      { count: 5, offset: (6 - 5) / 2 },
-      { count: 6, offset: 0 },
-      { count: 5, offset: 0.5 },
-      { count: 4, offset: 1 },
-      { count: 3, offset: 1.5 },
-    ];
-    const colWidth = hexSize * Math.sqrt(3);
-    const rowHeight = hexSize * 1.5;
-    return rows.flatMap((row, rowIndex) =>
-      Array.from({ length: row.count }, (_, i) => ({
-        x: (row.offset + i) * colWidth,
-        y: rowIndex * rowHeight
-      }))
-    );
-  }, []);
+  const shuffleArray = (array) => {
+    const newArray = [...array];
+    for (let i = newArray.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+    }
+    return newArray;
+  };
+
+  const getAdjacentHexes = (tile, allTiles) => {
+    return allTiles.filter(t => {
+      if (t.id === tile.id) return false;
+      const dx = t.x - tile.x;
+      const dy = t.y - tile.y;
+      return Math.sqrt(dx * dx + dy * dy) <= hexSize * 1.8;
+    });
+  };
+
+  const isValidPlacement = (tile, number, tiles) => {
+    if (!number) return true; // Desert tiles don't need validation
+
+    const adjacentTiles = getAdjacentHexes(tile, tiles);
+    const redNumbers = [6, 8];
+
+    // If this is a red number (6 or 8), check that no adjacent tiles have red numbers
+    if (redNumbers.includes(number)) {
+      return !adjacentTiles.some(t => t.dice && redNumbers.includes(t.dice));
+    }
+
+    return true;
+  };
 
   const generateBoard = useCallback(() => {
-    const positions = boardType === 'normal'
-      ? generateNormalPositions(hexSize)
-      : generateExpansionPositions(hexSize);
+    const positions = generateHexPositions();
+    let attempts = 0;
+    let bestTiles = null;
 
-    const resourceCounts = {
-      normal: { hills: 3, forest: 4, pasture: 4, fields: 4, mountains: 3, desert: 1 },
-      expansion: { hills: 5, forest: 6, pasture: 6, fields: 6, mountains: 5, desert: 2 }
-    };
+    while (attempts < 100) {
+      // Generate resources
+      const resources = Object.entries(RESOURCE_DISTRIBUTIONS[boardType])
+        .flatMap(([resource, count]) => Array(count).fill(resource));
+      const shuffledResources = shuffleArray(resources);
 
-    const generateResources = () => {
-      const resources = Object.entries(resourceCounts[boardType])
-        .flatMap(([resource, count]) => Array(count).fill(resource))
-        .sort(() => Math.random() - 0.5);
+      // Generate numbers
+      const numbers = [...NUMBER_DISTRIBUTIONS[boardType]];
+      const shuffledNumbers = shuffleArray(numbers);
+      let numberIndex = 0;
 
-      const tiles = positions.map((pos, i) => ({
-        ...pos,
-        resource: resources[i],
-        id: i,
-        adjacent: [],
+      // Create tiles without numbers first
+      let currentTiles = positions.map((pos, index) => ({
+        id: index,
+        x: pos.x,
+        y: pos.y,
+        resource: shuffledResources[index],
         dice: null
       }));
 
-      // Calculate adjacency
-      tiles.forEach(tile => {
-        tile.adjacent = tiles.filter(t => {
-          if (t.id === tile.id) return false;
-          const dx = t.x - tile.x;
-          const dy = t.y - tile.y;
-          return Math.sqrt(dx * dx + dy * dy) < hexSize * Math.sqrt(3) * 1.1;
-        }).map(t => t.id);
-      });
-
-      // Anti-clustering logic
-      const MAX_SAME_NEIGHBORS = 2;
-      for (let i = 0; i < tiles.length; i++) {
-        const tile = tiles[i];
-        const neighborResources = tile.adjacent.map(id =>
-          tiles.find(t => t.id === id).resource
-        );
-        const sameCount = neighborResources.filter(r => r === tile.resource).length;
-
-        if (sameCount > MAX_SAME_NEIGHBORS) {
-          for (let j = i + 1; j < tiles.length; j++) {
-            const other = tiles[j];
-            if (other.resource === tile.resource) continue;
-
-            const otherNeighbors = other.adjacent.map(id =>
-              tiles.find(t => t.id === id).resource
-            );
-            const otherSame = otherNeighbors.filter(r => r === other.resource).length;
-            const newSame = neighborResources.filter(r => r === other.resource).length;
-            const newOtherSame = otherNeighbors.filter(r => r === tile.resource).length;
-
-            if (newSame <= MAX_SAME_NEIGHBORS && newOtherSame <= MAX_SAME_NEIGHBORS) {
-              [tile.resource, other.resource] = [other.resource, tile.resource];
+      // Assign numbers with validation
+      let validNumberAssignment = true;
+      for (let tile of currentTiles) {
+        if (tile.resource !== 'desert') {
+          let validNumberFound = false;
+          // Try each remaining number until we find a valid one
+          for (let i = numberIndex; i < shuffledNumbers.length; i++) {
+            if (isValidPlacement(tile, shuffledNumbers[i], currentTiles)) {
+              tile.dice = shuffledNumbers[i];
+              // Swap the used number to the current position and increment index
+              [shuffledNumbers[numberIndex], shuffledNumbers[i]] =
+                [shuffledNumbers[i], shuffledNumbers[numberIndex]];
+              numberIndex++;
+              validNumberFound = true;
               break;
             }
+          }
+          if (!validNumberFound) {
+            validNumberAssignment = false;
+            break;
           }
         }
       }
 
-      return tiles;
-    };
+      if (validNumberAssignment) {
+        bestTiles = currentTiles;
+        break;
+      }
 
-    const rawTiles = generateResources();
+      attempts++;
+    }
 
-    const assignNumbers = (tiles) => {
-      const nonDesert = tiles.filter(t => t.resource !== 'desert');
-      const diceNumbers = {
-        normal: [2, 3, 3, 4, 4, 5, 5, 6, 6, 8, 8, 9, 9, 10, 10, 11, 11, 12],
-        expansion: [2, 3, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 6, 8, 8, 8, 8, 8, 9, 9, 9, 9, 10, 10, 10, 11, 12]
-      }[boardType];
-
-      const numbers = [...diceNumbers].sort(() => Math.random() - 0.5);
-      const redNumbers = numbers.filter(n => n === 6 || n === 8);
-      const others = numbers.filter(n => !redNumbers.includes(n));
-
-      const placeRedNumbers = () => {
-        const availableTiles = [...nonDesert];
-        redNumbers.forEach(red => {
-          availableTiles.sort(() => Math.random() - 0.5);
-          const tile = availableTiles.find(t =>
-            !t.dice &&
-            t.adjacent.every(id => {
-              const adjTile = tiles.find(t => t.id === id);
-              return !redNumbers.includes(adjTile?.dice);
-            })
-          );
-
-          if (tile) {
-            tile.dice = red;
-            availableTiles.splice(availableTiles.indexOf(tile), 1);
-          } else {
-            const fallbackTile = availableTiles.find(t => !t.dice);
-            if (fallbackTile) fallbackTile.dice = red;
-          }
-        });
-      };
-
-      const placeOthers = () => {
-        nonDesert.forEach(tile => {
-          if (!tile.dice) tile.dice = others.pop();
-        });
-      };
-
-      placeRedNumbers();
-      placeOthers();
-    };
-
-    assignNumbers(rawTiles);
+    if (!bestTiles) {
+      console.error('Failed to generate a valid board');
+      return;
+    }
 
     // Calculate viewBox
-    const bounds = rawTiles.reduce((acc, tile) => ({
+    const padding = hexSize * 1.2;
+    const bounds = bestTiles.reduce((acc, tile) => ({
       minX: Math.min(acc.minX, tile.x - hexSize),
       minY: Math.min(acc.minY, tile.y - hexSize),
       maxX: Math.max(acc.maxX, tile.x + hexSize),
       maxY: Math.max(acc.maxY, tile.y + hexSize),
     }), { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
 
-    setViewBox(`${bounds.minX} ${bounds.minY} ${bounds.maxX - bounds.minX} ${bounds.maxY - bounds.minY}`);
-    setTiles(rawTiles);
-  }, [boardType, generateNormalPositions, generateExpansionPositions, hexSize]);
+    setViewBox(`${bounds.minX - padding} ${bounds.minY - padding} 
+                ${bounds.maxX - bounds.minX + 2 * padding} 
+                ${bounds.maxY - bounds.minY + 2 * padding}`);
+    setTiles(bestTiles);
+  }, [boardType, generateHexPositions, hexSize]);
 
   useEffect(() => {
     generateBoard();
-  }, [boardType, generateBoard]);
+  }, [generateBoard]);
 
   return (
     <div style={styles.appWrapper}>
       <header style={styles.header}>
         <h1 style={{ ...styles.title, fontSize: isMobile ? '2rem' : '2.5rem' }}>
-          Catan Simulator
+          Catan Board Generator
         </h1>
       </header>
 
@@ -319,34 +297,18 @@ function App() {
         <select
           value={boardType}
           onChange={(e) => setBoardType(e.target.value)}
-          style={{
-            ...styles.select,
-            padding: isMobile ? '12px 20px' : '8px 16px',
-            fontSize: isMobile ? '1.2rem' : '1rem'
-          }}
+          style={styles.select}
         >
           <option value="normal">Normal (19 tiles)</option>
           <option value="expansion">Expansion (30 tiles)</option>
         </select>
 
-        <button
-          onClick={generateBoard}
-          style={{
-            ...styles.button,
-            padding: isMobile ? '12px 20px' : '8px 16px',
-            fontSize: isMobile ? '1.2rem' : '1rem'
-          }}
-        >
-          New Board
+        <button onClick={generateBoard} style={styles.button}>
+          Generate New Board
         </button>
       </div>
 
-      <div style={{
-        ...styles.boardContainer,
-        padding: isMobile ? 5 : 10,
-        margin: isMobile ? '0 10px' : '0 auto',
-        width: isMobile ? 'calc(100% - 20px)' : 'fit-content',
-      }}>
+      <div style={styles.boardContainer}>
         <svg
           viewBox={viewBox}
           preserveAspectRatio="xMidYMid meet"
@@ -408,22 +370,25 @@ const styles = {
     border: '1px solid #ccc',
     backgroundColor: 'darkgoldenrod',
     color: 'white',
+    padding: '8px 16px',
   },
   button: {
     borderRadius: 4,
     border: 'none',
     backgroundColor: 'darkgoldenrod',
     color: 'white',
+    padding: '8px 16px',
     cursor: 'pointer',
-    ':hover': {
-      backgroundColor: 'burlywood',
-    },
   },
   boardContainer: {
     background: 'rgba(255,255,255,0.15)',
     borderRadius: 16,
     boxShadow: '0 8px 32px 0 rgba(31,38,135,0.37)',
     backdropFilter: 'blur(8px)',
+    padding: 10,
+    margin: '0 auto',
+    display: 'flex',
+    justifyContent: 'center'
   },
 };
 
